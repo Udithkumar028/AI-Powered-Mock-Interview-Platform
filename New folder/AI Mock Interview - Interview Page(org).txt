@@ -1,0 +1,1416 @@
+Interview Page:
+
+index.jsx:
+import { useState, useEffect } from 'react';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
+import {
+  getInterview,
+  submitTextAnswer,
+  transcribeAudio,
+  submitCode,
+  endInterview,
+} from '../../services/interviewService.js';
+import VoiceRecorder from '../../components/VoiceRecorder';
+import AudioPlayer from '../../components/AudioPlayer';
+import CodeEditor from '../../components/CodeEditor';
+import { FaUserTie } from 'react-icons/fa';
+import {
+  BsRecordCircleFill,
+  BsKeyboardFill,
+  BsCodeSlash,
+  BsCheck,
+  BsCheckCircleFill,
+  BsXCircleFill,
+} from 'react-icons/bs';
+import toast from 'react-hot-toast';
+import './index.css';
+
+const STATE_SPEAKING = 'speaking';
+const STATE_THINKING = 'thinking';
+const STATE_LISTENING = 'listening';
+const STATE_FAREWELL = 'farewell';
+
+function InterviewPage() {
+  const { id } = useParams();
+  const navigate = useNavigate();
+  const location = useLocation();
+
+  const [loading, setLoading] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+  const [ending, setEnding] = useState(false);
+
+  const [interviewerState, setInterviewerState] = useState(STATE_SPEAKING);
+
+  const [showTextFallback, setShowTextFallback] = useState(false);
+  const [textAnswer, setTextAnswer] = useState('');
+
+  const [code, setCode] = useState('');
+  const [codeLanguage, setCodeLanguage] = useState('javascript');
+  const [codeEvaluation, setCodeEvaluation] = useState(null);
+
+  const [currentAudio, setCurrentAudio] = useState(null);
+  const [audioKey, setAudioKey] = useState(0);
+
+  const [currentQuestionNum, setCurrentQuestionNum] = useState(1);
+  const [totalQuestions, setTotalQuestions] = useState(5);
+  const [currentQuestion, setCurrentQuestion] = useState(null);
+  const [interviewerText, setInterviewerText] = useState('');
+  const [farewellMessage, setFarewellMessage] = useState('');
+
+  useEffect(() => {
+  const loadInterview = async () => {
+    try {
+      const data = await getInterview(id);
+      setCurrentQuestionNum(data.currentQuestion);
+      setTotalQuestions(data.totalQuestions);
+
+      if (data.questions && data.questions.length > 0) {
+        const qIndex = data.currentQuestion - 1;
+        setCurrentQuestion(data.questions[qIndex] || data.questions[0]);
+      }
+
+      const interviewerMsgs = data.messages.filter(
+        (m) => m.role === 'interviewer'
+      );
+      if (data.currentQuestion === 1 && interviewerMsgs.length >= 1) {
+        setInterviewerText(interviewerMsgs[0].content);
+      } else if (interviewerMsgs.length > 0) {
+        setInterviewerText(interviewerMsgs[interviewerMsgs.length - 1].content);
+      }
+
+      if (data.currentQuestion === 1) {
+        const audio = location.state?.audio || data.lastAudio;
+        if (audio) {
+          setCurrentAudio(audio);
+          setInterviewerState(STATE_SPEAKING);
+        } else {
+          setInterviewerState(STATE_SPEAKING);
+          setTimeout(() => setInterviewerState(STATE_LISTENING), 3000);
+        }
+      } else {
+        setInterviewerState(STATE_LISTENING);
+      }
+    } catch (error) {
+      toast.error('Failed to load interview');
+      navigate('/');
+    } finally {
+      setLoading(false);
+    }
+  };
+  loadInterview();
+}, [id, navigate, location.state]);
+
+const handleAudioEnded = () => {
+  if (interviewerState === STATE_FAREWELL) return;
+  setTimeout(() => setInterviewerState(STATE_LISTENING), 3000);
+};
+
+const resetAnswerFields = () => {
+  setTextAnswer('');
+  setCode('');
+  setCodeEvaluation(null);
+  setShowTextFallback(false);
+};
+
+const processAnswerResult = (result) => {
+  if (result.isComplete) {
+    const farewellText =
+      'Thank you for completing the interview! I really enjoyed our conversation. Let me prepare your detailed feedback report...';
+    setFarewellMessage(farewellText);
+    setInterviewerState(STATE_FAREWELL);
+
+    if (result.audio) {
+      setTimeout(() => {
+        setCurrentAudio(result.audio);
+        setAudioKey((prev) => prev + 1);
+      }, 100);
+      setTimeout(() => handleEndInterview(), 10000);
+    } else {
+      setTimeout(() => handleEndInterview(), 4000);
+    }
+    return;
+  }
+
+  setInterviewerText(result.response);
+  setCurrentQuestionNum(result.currentQuestion);
+  setCurrentQuestion(result.question);
+  setCurrentAudio(result.audio);
+  setAudioKey((prev) => prev + 1);
+  resetAnswerFields();
+
+  setInterviewerState(STATE_SPEAKING);
+  if (!result.audio) {
+    setTimeout(() => setInterviewerState(STATE_LISTENING), 3000);
+  }
+};
+
+const submitAndProcess = async (answerText) => {
+  setSubmitting(true);
+  setInterviewerState(STATE_THINKING);
+  try {
+    const result = await submitTextAnswer(id, answerText);
+    processAnswerResult(result);
+  } catch (error) {
+    toast.error(error.response?.data?.message || 'Failed to submit answer');
+    setInterviewerState(STATE_LISTENING);
+  } finally {
+    setSubmitting(false);
+  }
+};
+
+const handleRecordingComplete = async (audioBlob) => {
+  setSubmitting(true);
+  setInterviewerState(STATE_THINKING);
+  try {
+    const data = await transcribeAudio(audioBlob);
+    const answerText =
+      data.text && !data.text.startsWith('[')
+        ? data.text
+        : 'The candidate provided a verbal response.';
+
+    const result = await submitTextAnswer(id, answerText);
+    processAnswerResult(result);
+  } catch (error) {
+    toast.error(error.response?.data?.message || 'Failed to submit answer');
+    setInterviewerState(STATE_LISTENING);
+  } finally {
+    setSubmitting(false);
+  }
+};
+
+const handleSubmitText = () => {
+  if (!textAnswer.trim()) return toast.error('Please type your answer.');
+  submitAndProcess(textAnswer);
+};
+
+const handleSubmitCode = async () => {
+  if (!code.trim()) return toast.error('Please write some code.');
+  setSubmitting(true);
+  setInterviewerState(STATE_THINKING);
+  try {
+    const result = await submitCode(id, code, codeLanguage);
+    setCodeEvaluation(result.evaluation);
+    toast.success(`Code evaluated: ${result.evaluation.score}/100`);
+
+    if (result.isComplete) {
+      setFarewellMessage(
+        'Thank you for completing the interview! I really enjoyed our conversation. Let me prepare your detailed feedback report...'
+      );
+      setInterviewerState(STATE_FAREWELL);
+      if (result.audio) {
+        setTimeout(() => {
+          setCurrentAudio(result.audio);
+          setAudioKey((prev) => prev + 1);
+        }, 100);
+        setTimeout(() => handleEndInterview(), 10000);
+      } else {
+        setTimeout(() => handleEndInterview(), 4000);
+      }
+      return;
+    }
+
+    setTimeout(() => processAnswerResult(result), 2500);
+  } catch (error) {
+    toast.error('Failed to evaluate code');
+    setInterviewerState(STATE_LISTENING);
+  } finally {
+    setSubmitting(false);
+  }
+};
+
+const handleEndInterview = async () => {
+  setEnding(true);
+  try {
+    await endInterview(id);
+    navigate(`/feedback/${id}`);
+  } catch (error) {
+    toast.error('Failed to generate feedback');
+  } finally {
+    setEnding(false);
+  }
+};
+
+  if (loading) {
+    return (
+      <div className="interview-loading-state">
+        <div className="spinner-border spinner-border-sm" role="status" />
+        <p className="interview-loading-text">Loading interview...</p>
+      </div>
+    );
+  }
+
+  const isCodeQuestion = currentQuestion?.isCodeQuestion;
+  const progressPercent = (currentQuestionNum / totalQuestions) * 100;
+  const isSpeaking = interviewerState === STATE_SPEAKING;
+  const isThinking = interviewerState === STATE_THINKING;
+  const isListening = interviewerState === STATE_LISTENING;
+  const isFarewell = interviewerState === STATE_FAREWELL;
+
+  return (
+    <div className="interview-layout">
+      <div className="interview-topbar">
+        <div className="topbar-left">
+          <span className="topbar-question-label">
+            Question {currentQuestionNum} of {totalQuestions}
+          </span>
+          <div className="topbar-progress-track">
+            <div
+              className="topbar-progress-fill"
+              style={{ width: `${progressPercent}%` }}
+            />
+          </div>
+        </div>
+        <div className="topbar-right">
+          {currentQuestionNum >= totalQuestions && isListening && (
+            <button
+              className={`topbar-end-btn ${ending ? 'topbar-end-btn-disabled' : ''}`}
+              onClick={handleEndInterview}
+              disabled={ending}
+            >
+              {ending ? 'Generating Feedback...' : 'End Interview'}
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div className="interviewer-panel">
+        <div className="interviewer-avatar-block">
+          <div className="interviewer-avatar-circle">
+            <FaUserTie className="interviewer-avatar-icon" />
+          </div>
+          <div className="interviewer-avatar-info">
+            <span className="interviewer-avatar-name">Natalie</span>
+            <span className="interviewer-avatar-role">AI Interviewer</span>
+          </div>
+        </div>
+
+        <div className="interviewer-status-block">
+          {isSpeaking && (
+            <span className="status-text status-speaking">Speaking...</span>
+          )}
+          {isThinking && (
+            <div className="status-thinking-row">
+              <div className="spinner-border spinner-border-sm" role="status" />
+              <span className="status-text status-thinking">Thinking...</span>
+            </div>
+          )}
+          {isListening && (
+            <div className="status-listening-row">
+              <BsRecordCircleFill className="status-listening-icon" />
+              <span className="status-text status-listening">
+                Your turn to answer
+              </span>
+            </div>
+          )}
+          {isFarewell && (
+            <div className="status-farewell-row">
+              <div className="spinner-border spinner-border-sm" role="status" />
+              <span className="status-text status-farewell">
+                Wrapping up...
+              </span>
+            </div>
+          )}
+        </div>
+
+        {currentAudio && (
+          <AudioPlayer
+            key={audioKey}
+            audioBase64={currentAudio}
+            autoPlay={true}
+            onEnded={handleAudioEnded}
+          />
+        )}
+
+        {isFarewell && (
+          <div className="interviewer-farewell-block">
+            <p className="interviewer-farewell-text">{farewellMessage}</p>
+            <div className="spinner-border spinner-border-sm" role="status" />
+          </div>
+        )}
+
+        {!isFarewell && !isThinking && interviewerText && (
+          <div className="interviewer-message-block">
+            <p className="interviewer-message-text">{interviewerText}</p>
+            {isListening && currentAudio && (
+              <button
+                className="interviewer-hear-again-link"
+                onClick={() => {
+                  setAudioKey((prev) => prev + 1);
+                  setInterviewerState(STATE_SPEAKING);
+                }}
+              >
+                Hear Again
+              </button>
+            )}
+          </div>
+        )}
+
+        {!isFarewell && currentQuestion && !isThinking && (
+          <div className="interviewer-question-callout">
+            <div className="question-callout-header">
+              <span className="question-num-badge">Q{currentQuestionNum}</span>
+              <span className="question-type-badge">{currentQuestion.type}</span>
+              {isCodeQuestion && (
+                <span className="question-code-badge">
+                  <BsCodeSlash className="question-code-icon" /> Code
+                </span>
+              )}
+            </div>
+            <p className="question-callout-text">{currentQuestion.text}</p>
+          </div>
+        )}
+      </div>
+
+      <div className="answer-panel">
+        {isListening && (
+          <>
+            {!isCodeQuestion && (
+              <>
+                <div className="voice-answer-block">
+                  <div className="voice-block-header">
+                    <div>
+                      <h3 className="voice-block-title">Record Your Answer</h3>
+                      <p className="voice-block-desc">
+                        Click record, speak your answer (max 5 min), then submit
+                      </p>
+                    </div>
+                  </div>
+                  <div className="voice-block-area">
+                    {!submitting && (
+                      <VoiceRecorder
+                        onRecordingComplete={handleRecordingComplete}
+                        disabled={submitting}
+                      />
+                    )}
+                    {submitting && (
+                      <div className="processing-indicator">
+                        <div
+                          className="spinner-border spinner-border-sm"
+                          role="status"
+                        />
+                        <p className="processing-text">
+                          Processing your answer...
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="text-fallback-block">
+                  <button
+                    className="text-fallback-toggle-btn"
+                    onClick={() => setShowTextFallback(!showTextFallback)}
+                  >
+                    <span className="text-fallback-toggle-label">
+                      <BsKeyboardFill className="text-fallback-icon" />
+                      {showTextFallback
+                        ? 'Hide text input'
+                        : 'Prefer typing instead?'}
+                    </span>
+                    <span
+                      className={
+                        showTextFallback
+                          ? 'toggle-arrow-open'
+                          : 'toggle-arrow-closed'
+                      }
+                    >
+                      &#9660;
+                    </span>
+                  </button>
+                  {showTextFallback && (
+                    <div className="text-answer-block">
+                      <textarea
+                        className={`text-answer-textarea ${submitting ? 'text-answer-textarea-disabled' : ''}`}
+                        placeholder="Type your answer here..."
+                        value={textAnswer}
+                        onChange={(e) => setTextAnswer(e.target.value)}
+                        rows={4}
+                        disabled={submitting}
+                      />
+                      <button
+                        className={`submit-text-btn ${submitting || !textAnswer.trim() ? 'submit-text-btn-disabled' : ''}`}
+                        onClick={handleSubmitText}
+                        disabled={submitting || !textAnswer.trim()}
+                      >
+                        {submitting ? 'Submitting...' : 'Submit Text Answer'}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+
+            {isCodeQuestion && (
+              <div className="code-answer-block">
+                <div className="code-block-header">
+                  <h3 className="code-block-title">
+                    <BsCodeSlash className="code-title-icon" />
+                    {currentQuestion.codeType === 'fix'
+                      ? 'Fix the Code'
+                      : currentQuestion.codeType === 'explain'
+                      ? 'Explain the Code'
+                      : 'Write Your Solution'}
+                  </h3>
+                  <select
+                    value={codeLanguage}
+                    onChange={(e) => setCodeLanguage(e.target.value)}
+                    className="code-language-select"
+                  >
+                    <option value="javascript">JavaScript</option>
+                    <option value="python">Python</option>
+                    <option value="java">Java</option>
+                    <option value="cpp">C++</option>
+                  </select>
+                </div>
+
+                {currentQuestion.codeSnippet && (
+                  <div className="code-snippet-box">
+                    <h4 className="code-snippet-label">
+                      {currentQuestion.codeType === 'fix'
+                        ? 'Buggy Code:'
+                        : 'Code to Explain:'}
+                    </h4>
+                    <pre className="code-snippet-pre">
+                      {currentQuestion.codeSnippet}
+                    </pre>
+                  </div>
+                )}
+
+                {currentQuestion.codeType !== 'explain' ? (
+                  <>
+                    <CodeEditor
+                      value={
+                        code ||
+                        (currentQuestion.codeType === 'fix'
+                          ? currentQuestion.codeSnippet || ''
+                          : '')
+                      }
+                      onChange={(val) => setCode(val || '')}
+                      language={currentQuestion.codeLanguage || codeLanguage}
+                    />
+                    <button
+                      className={`submit-code-btn ${submitting || !code.trim() ? 'submit-code-btn-disabled' : ''}`}
+                      onClick={handleSubmitCode}
+                      disabled={submitting || !code.trim()}
+                    >
+                      {submitting
+                        ? 'Evaluating...'
+                        : currentQuestion.codeType === 'fix'
+                        ? 'Submit Fixed Code'
+                        : 'Submit Solution'}
+                    </button>
+                  </>
+                ) : (
+                  <div className="explain-answer-block">
+                    <p className="explain-hint-text">
+                      Explain verbally what this code does, or type your
+                      explanation below.
+                    </p>
+
+                    <div className="voice-block-area">
+                      {!submitting && (
+                        <VoiceRecorder
+                          onRecordingComplete={async (audioBlob) => {
+                            setSubmitting(true);
+                            setInterviewerState(STATE_THINKING);
+                            try {
+                              const data = await transcribeAudio(audioBlob);
+                              const text =
+                                data.text || 'Verbal explanation provided.';
+                              setCode(text);
+                              setTimeout(() => handleSubmitCode(), 100);
+                            } catch (error) {
+                              setCode('Verbal explanation provided.');
+                              setTimeout(() => handleSubmitCode(), 100);
+                            }
+                          }}
+                          disabled={submitting}
+                        />
+                      )}
+                      {submitting && (
+                        <div className="processing-indicator">
+                          <div
+                            className="spinner-border spinner-border-sm"
+                            role="status"
+                          />
+                          <p className="processing-text">
+                            Processing your explanation...
+                          </p>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="text-fallback-block">
+                      <button
+                        className="text-fallback-toggle-btn"
+                        onClick={() => setShowTextFallback(!showTextFallback)}
+                      >
+                        <span className="text-fallback-toggle-label">
+                          <BsKeyboardFill className="text-fallback-icon" />
+                          {showTextFallback
+                            ? 'Hide'
+                            : 'Prefer typing your explanation?'}
+                        </span>
+                        <span
+                          className={
+                            showTextFallback
+                              ? 'toggle-arrow-open'
+                              : 'toggle-arrow-closed'
+                          }
+                        >
+                          &#9660;
+                        </span>
+                      </button>
+                      {showTextFallback && (
+                        <div className="text-answer-block">
+                          <textarea
+                            className={`text-answer-textarea ${submitting ? 'text-answer-textarea-disabled' : ''}`}
+                            placeholder="Type your explanation... What does this code do?"
+                            value={code}
+                            onChange={(e) => setCode(e.target.value)}
+                            rows={4}
+                            disabled={submitting}
+                          />
+                          <button
+                            className={`submit-code-btn ${submitting || !code.trim() ? 'submit-code-btn-disabled' : ''}`}
+                            onClick={handleSubmitCode}
+                            disabled={submitting || !code.trim()}
+                          >
+                            {submitting
+                              ? 'Evaluating...'
+                              : 'Submit Explanation'}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {codeEvaluation && (
+                  <div
+                    className={
+                      codeEvaluation.isCorrect
+                        ? 'code-eval-block code-eval-correct'
+                        : 'code-eval-block code-eval-incorrect'
+                    }
+                  >
+                    <div className="code-eval-header">
+                      <span className="code-eval-status">
+                        {codeEvaluation.isCorrect ? (
+                          <>
+                            <BsCheckCircleFill className="code-eval-icon-correct" />
+                            Correct
+                          </>
+                        ) : (
+                          <>
+                            <BsXCircleFill className="code-eval-icon-incorrect" />
+                            Needs Improvement
+                          </>
+                        )}
+                      </span>
+                      <span className="code-eval-score">
+                        Score: {codeEvaluation.score}/100
+                      </span>
+                    </div>
+                    <p className="code-eval-feedback">
+                      {codeEvaluation.feedback}
+                    </p>
+                    {codeEvaluation.suggestions && (
+                      <p className="code-eval-suggestions">
+                        <strong>Tip:</strong> {codeEvaluation.suggestions}
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </>
+        )}
+
+        {isSpeaking && (
+          <div className="answer-panel-status">
+            <p className="answer-panel-status-text">
+              Natalie is speaking... please listen carefully
+            </p>
+          </div>
+        )}
+        {isThinking && (
+          <div className="answer-panel-status">
+            <div className="spinner-border spinner-border-sm" role="status" />
+            <p className="answer-panel-status-text">
+              Natalie is preparing the next question...
+            </p>
+          </div>
+        )}
+        {isFarewell && (
+          <div className="answer-panel-status">
+            <div className="spinner-border spinner-border-sm" role="status" />
+            <p className="answer-panel-status-text">
+              Generating your feedback report...
+            </p>
+          </div>
+        )}
+      </div>
+
+      <div className="interview-timeline">
+        <div className="timeline-dots-row">
+          {Array.from({ length: totalQuestions }, (_, i) => {
+            const qNum = i + 1;
+            const isAnswered = qNum < currentQuestionNum;
+            const isCurrent = qNum === currentQuestionNum;
+            let dotClass = 'timeline-dot-circle';
+            if (isAnswered) dotClass += ' timeline-dot-answered';
+            if (isCurrent) dotClass += ' timeline-dot-current';
+            return (
+              <div key={i} className={dotClass}>
+                {isAnswered ? (
+                  <BsCheck className="timeline-check-icon" />
+                ) : (
+                  qNum
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default InterviewPage;
+
+
+
+index.css:
+/* ==============================
+   InterviewPage - Two-Panel Layout
+   ============================== */
+
+/* Grid Layout */
+.interview-layout {
+  display: grid;
+  grid-template-columns: 2fr 3fr;
+  grid-template-rows: 60px 1fr 50px;
+  grid-template-areas:
+    "topbar topbar"
+    "interviewer answer"
+    "timeline timeline";
+  min-height: 100vh;
+}
+
+/* Loading State */
+.interview-loading-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  background-color: #f8fafc;
+  gap: 12px;
+}
+
+.interview-loading-text {
+  font-family: "Roboto", sans-serif;
+  font-size: 16px;
+  color: #64748b;
+  margin: 0;
+}
+
+/* ==============================
+   TOP BAR
+   ============================== */
+.interview-topbar {
+  grid-area: topbar;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 24px;
+  background-color: #ffffff;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex: 1;
+}
+
+.topbar-question-label {
+  font-family: "Roboto", sans-serif;
+  font-size: 14px;
+  font-weight: 600;
+  color: #0f172a;
+  white-space: nowrap;
+}
+
+.topbar-progress-track {
+  flex: 1;
+  max-width: 300px;
+  height: 8px;
+  background-color: #e2e8f0;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.topbar-progress-fill {
+  height: 100%;
+  background-color: #2563eb;
+  border-radius: 4px;
+}
+
+.topbar-right {
+  display: flex;
+  align-items: center;
+}
+
+.topbar-end-btn {
+  font-family: "Roboto", sans-serif;
+  font-size: 14px;
+  font-weight: 600;
+  padding: 8px 20px;
+  background-color: #dc2626;
+  color: #ffffff;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.topbar-end-btn-disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ==============================
+   LEFT PANEL - INTERVIEWER
+   ============================== */
+.interviewer-panel {
+  grid-area: interviewer;
+  background-color: #f1f5f9;
+  padding: 24px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+/* Avatar Block */
+.interviewer-avatar-block {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.interviewer-avatar-circle {
+  width: 80px;
+  height: 80px;
+  border-radius: 50%;
+  background-color: #2563eb;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.interviewer-avatar-icon {
+  font-size: 32px;
+  color: #ffffff;
+}
+
+.interviewer-avatar-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.interviewer-avatar-name {
+  font-family: "Roboto", sans-serif;
+  font-size: 18px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.interviewer-avatar-role {
+  font-family: "Roboto", sans-serif;
+  font-size: 14px;
+  color: #64748b;
+}
+
+/* Status Block */
+.interviewer-status-block {
+  display: flex;
+  align-items: center;
+}
+
+.status-text {
+  font-family: "Roboto", sans-serif;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.status-speaking {
+  color: #2563eb;
+}
+
+.status-thinking-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.status-thinking {
+  color: #d97706;
+}
+
+.status-listening-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.status-listening-icon {
+  font-size: 14px;
+  color: #16a34a;
+}
+
+.status-listening {
+  color: #16a34a;
+}
+
+.status-farewell-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.status-farewell {
+  color: #64748b;
+}
+
+/* Farewell Block */
+.interviewer-farewell-block {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.interviewer-farewell-text {
+  font-family: "Roboto", sans-serif;
+  font-size: 15px;
+  color: #334155;
+  line-height: 1.6;
+  margin: 0;
+}
+
+/* Message Block */
+.interviewer-message-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.interviewer-message-text {
+  font-family: "Roboto", sans-serif;
+  font-size: 15px;
+  color: #334155;
+  line-height: 1.6;
+  margin: 0;
+}
+
+.interviewer-hear-again-link {
+  background: none;
+  border: none;
+  padding: 0;
+  font-family: "Roboto", sans-serif;
+  font-size: 14px;
+  color: #2563eb;
+  cursor: pointer;
+  text-align: left;
+  font-weight: 600;
+}
+
+/* Question Callout */
+.interviewer-question-callout {
+  border-left: 4px solid #2563eb;
+  background-color: #f8fafc;
+  padding: 16px;
+  border-radius: 0 8px 8px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.question-callout-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.question-num-badge {
+  font-family: "Roboto", sans-serif;
+  font-size: 12px;
+  font-weight: 700;
+  color: #ffffff;
+  background-color: #2563eb;
+  padding: 2px 10px;
+  border-radius: 12px;
+}
+
+.question-type-badge {
+  font-family: "Roboto", sans-serif;
+  font-size: 12px;
+  font-weight: 600;
+  color: #2563eb;
+  background-color: #dbeafe;
+  padding: 2px 10px;
+  border-radius: 12px;
+}
+
+.question-code-badge {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-family: "Roboto", sans-serif;
+  font-size: 12px;
+  font-weight: 600;
+  color: #0f172a;
+  background-color: #e2e8f0;
+  padding: 2px 10px;
+  border-radius: 12px;
+}
+
+.question-code-icon {
+  font-size: 12px;
+}
+
+.question-callout-text {
+  font-family: "Roboto", sans-serif;
+  font-size: 15px;
+  color: #0f172a;
+  line-height: 1.6;
+  margin: 0;
+  font-weight: 500;
+}
+
+/* ==============================
+   RIGHT PANEL - ANSWER AREA
+   ============================== */
+.answer-panel {
+  grid-area: answer;
+  background-color: #ffffff;
+  padding: 24px;
+  border-left: 1px solid #e2e8f0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+/* Voice Answer Block */
+.voice-answer-block {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.voice-block-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.voice-block-title {
+  font-family: "Bree Serif", serif;
+  font-size: 18px;
+  color: #0f172a;
+  margin: 0;
+}
+
+.voice-block-desc {
+  font-family: "Roboto", sans-serif;
+  font-size: 13px;
+  color: #64748b;
+  margin: 4px 0 0 0;
+}
+
+.voice-block-area {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+/* Processing Indicator */
+.processing-indicator {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 20px;
+}
+
+.processing-text {
+  font-family: "Roboto", sans-serif;
+  font-size: 14px;
+  color: #64748b;
+  margin: 0;
+}
+
+/* Text Fallback Block */
+.text-fallback-block {
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.text-fallback-toggle-btn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  background-color: #f8fafc;
+  border: none;
+  cursor: pointer;
+  font-family: "Roboto", sans-serif;
+  font-size: 14px;
+  color: #334155;
+}
+
+.text-fallback-toggle-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.text-fallback-icon {
+  font-size: 16px;
+  color: #64748b;
+}
+
+.toggle-arrow-open {
+  font-size: 10px;
+  color: #64748b;
+}
+
+.toggle-arrow-closed {
+  font-size: 10px;
+  color: #64748b;
+}
+
+.text-answer-block {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.text-answer-textarea {
+  width: 100%;
+  padding: 12px;
+  font-family: "Roboto", sans-serif;
+  font-size: 14px;
+  color: #334155;
+  background-color: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  resize: vertical;
+  box-sizing: border-box;
+}
+
+.text-answer-textarea-disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.submit-text-btn {
+  align-self: flex-end;
+  font-family: "Roboto", sans-serif;
+  font-size: 14px;
+  font-weight: 600;
+  padding: 10px 24px;
+  background-color: #2563eb;
+  color: #ffffff;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.submit-text-btn-disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Code Answer Block */
+.code-answer-block {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.code-block-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.code-block-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: "Bree Serif", serif;
+  font-size: 18px;
+  color: #0f172a;
+  margin: 0;
+}
+
+.code-title-icon {
+  font-size: 20px;
+  color: #2563eb;
+}
+
+.code-language-select {
+  font-family: "Roboto", sans-serif;
+  font-size: 13px;
+  padding: 6px 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  color: #334155;
+  background-color: #ffffff;
+}
+
+.code-snippet-box {
+  background-color: #f1f5f9;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.code-snippet-label {
+  font-family: "Roboto", sans-serif;
+  font-size: 13px;
+  font-weight: 700;
+  color: #0f172a;
+  margin: 0 0 8px 0;
+}
+
+.code-snippet-pre {
+  font-family: monospace;
+  font-size: 13px;
+  color: #334155;
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.submit-code-btn {
+  align-self: flex-end;
+  font-family: "Roboto", sans-serif;
+  font-size: 14px;
+  font-weight: 600;
+  padding: 10px 24px;
+  background-color: #2563eb;
+  color: #ffffff;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.submit-code-btn-disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.explain-answer-block {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.explain-hint-text {
+  font-family: "Roboto", sans-serif;
+  font-size: 14px;
+  color: #64748b;
+  margin: 0;
+}
+
+/* Code Evaluation */
+.code-eval-block {
+  border-radius: 8px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.code-eval-correct {
+  background-color: #dcfce7;
+  border: 1px solid #16a34a;
+}
+
+.code-eval-incorrect {
+  background-color: #fee2e2;
+  border: 1px solid #dc2626;
+}
+
+.code-eval-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.code-eval-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: "Roboto", sans-serif;
+  font-size: 14px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.code-eval-icon-correct {
+  font-size: 16px;
+  color: #16a34a;
+}
+
+.code-eval-icon-incorrect {
+  font-size: 16px;
+  color: #dc2626;
+}
+
+.code-eval-score {
+  font-family: "Roboto", sans-serif;
+  font-size: 14px;
+  font-weight: 700;
+  color: #334155;
+}
+
+.code-eval-feedback {
+  font-family: "Roboto", sans-serif;
+  font-size: 14px;
+  color: #334155;
+  margin: 0;
+  line-height: 1.5;
+}
+
+.code-eval-suggestions {
+  font-family: "Roboto", sans-serif;
+  font-size: 13px;
+  color: #64748b;
+  margin: 0;
+  line-height: 1.5;
+}
+
+/* Answer Panel Status Messages */
+.answer-panel-status {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 40px 20px;
+  flex: 1;
+}
+
+.answer-panel-status-text {
+  font-family: "Roboto", sans-serif;
+  font-size: 15px;
+  color: #64748b;
+  margin: 0;
+  text-align: center;
+}
+
+/* ==============================
+   BOTTOM TIMELINE
+   ============================== */
+.interview-timeline {
+  grid-area: timeline;
+  background-color: #ffffff;
+  border-top: 1px solid #e2e8f0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 24px;
+}
+
+.timeline-dots-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.timeline-dot-circle {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: "Roboto", sans-serif;
+  font-size: 13px;
+  font-weight: 600;
+  background-color: #ffffff;
+  border: 2px solid #cbd5e1;
+  color: #64748b;
+}
+
+.timeline-dot-answered {
+  background-color: #16a34a;
+  border-color: #16a34a;
+  color: #ffffff;
+}
+
+.timeline-dot-current {
+  background-color: #2563eb;
+  border: 3px solid #1d4ed8;
+  color: #ffffff;
+}
+
+.timeline-check-icon {
+  font-size: 16px;
+}
+
+/* ==============================
+   MOBILE RESPONSIVE (<768px)
+   ============================== */
+@media (max-width: 768px) {
+  .interview-layout {
+    grid-template-columns: 1fr;
+    grid-template-rows: 60px auto auto 50px;
+    grid-template-areas:
+      "topbar"
+      "interviewer"
+      "answer"
+      "timeline";
+  }
+
+  .answer-panel {
+    border-left: none;
+    border-top: 1px solid #e2e8f0;
+  }
+
+  .interviewer-panel {
+    padding: 16px;
+  }
+
+  .answer-panel {
+    padding: 16px;
+  }
+
+  .interviewer-avatar-circle {
+    width: 60px;
+    height: 60px;
+  }
+
+  .interviewer-avatar-icon {
+    font-size: 24px;
+  }
+
+  .topbar-progress-track {
+    max-width: 150px;
+  }
+}
