@@ -226,20 +226,4 @@ Aspiring Full Stack Developer passionate about AI-powered applications, scalable
 
 🔗 LinkedIn: https://www.linkedin.com/in/udith-kumar-31a2aa2a3/
 
----
 
-## ⭐ Support
-
-If you found this project useful:
-
-⭐ Star the repository
-
-🍴 Fork the repository
-
-📢 Share it with others
-
----
-
-## 📜 License
-
-This project is licensed under the MIT License.
