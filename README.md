@@ -187,9 +187,6 @@ Backend: http://localhost:5000
 
 ## 📸 Screenshots
 
-Add project screenshots here.
-
-```md
 <img width="1521" height="726" alt="image" src="https://github.com/user-attachments/assets/84f22a8b-de06-455a-9bb2-34c79af6af96" />
 
 <img width="1521" height="725" alt="image" src="https://github.com/user-attachments/assets/84d32566-dc07-412f-88ab-1be23581deaa" />
@@ -198,6 +195,7 @@ Add project screenshots here.
 
 <img width="1521" height="728" alt="image" src="https://github.com/user-attachments/assets/164a60ef-62a9-4b66-8ecc-3dd4a06825c5" />
 
+```md
 
 ```
 
