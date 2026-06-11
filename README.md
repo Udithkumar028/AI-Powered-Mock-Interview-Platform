@@ -191,9 +191,10 @@ Backend: http://localhost:5000
 
 <img width="1521" height="725" alt="image" src="https://github.com/user-attachments/assets/84d32566-dc07-412f-88ab-1be23581deaa" />
 
-<img width="1518" height="725" alt="image" src="https://github.com/user-attachments/assets/6271bbb0-5dbe-4341-a322-0bce9eaa4b2e" />
-
 <img width="1521" height="728" alt="image" src="https://github.com/user-attachments/assets/164a60ef-62a9-4b66-8ecc-3dd4a06825c5" />
+
+<img width="368" height="722" alt="image" src="https://github.com/user-attachments/assets/c3370a8e-067d-4b57-b696-f61749423d8c" />
+
 
 ```md
 
